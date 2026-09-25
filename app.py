@@ -33,6 +33,7 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-change-this-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 4 * 1024 * 1024  # Vercel-friendly request size
 app.config["SUPABASE_STORAGE_BUCKET"] = os.environ.get("SUPABASE_STORAGE_BUCKET", "media")
+app.config["DATABASE_URL"] = os.environ.get("DATABASE_URL", "")
 
 app.config["SUPABASE_URL"] = os.environ.get("SUPABASE_URL", "")
 app.config["SUPABASE_SECRET_KEY"] = os.environ.get(
@@ -171,7 +172,7 @@ def parse_safari_form(form):
 
 
 def _storage():
-    return db.get_db().storage.from_(app.config["SUPABASE_STORAGE_BUCKET"])
+    return db.storage()
 
 
 def _storage_public_url(path):
@@ -577,7 +578,8 @@ def reset_db_command():
     print("Supabase database reset and reseeded.")
 
 
-bootstrap_database()
+
+# Vercel imports this module to obtain the Flask WSGI application. Do not perform database bootstrap/DDL at import time; Supabase schema is provisioned separately with supabase_schema.sql.
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -79,3 +79,17 @@ flask --app app run
 ## Vercel notes
 
 Vercel's runtime filesystem should not be treated as persistent storage. Do not modify the application to save uploaded files under `static/uploads` or `static/covers`; use Supabase Storage instead.
+
+
+### Vercel startup note
+The Flask module does not run database bootstrap or schema-creation code during import. Run `supabase_schema.sql` once in Supabase before deploying; Vercel can then import `api/index.py` normally.
+
+
+## Direct PostgreSQL connection
+
+This version uses a direct PostgreSQL connection for application data. Set
+`DATABASE_URL` in Vercel to the Supabase PostgreSQL connection string. Keep the
+password server-side and never commit it to Git.
+
+The Supabase client remains only for Storage uploads. Run `supabase_schema.sql`
+once in Supabase before deploying.

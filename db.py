@@ -1,20 +1,21 @@
 """
-Database layer for Diani Sea Adventures using Supabase/PostgreSQL.
+PostgreSQL database layer for Diani Sea Adventures.
 
-The Flask app talks to Supabase through the server-side Python client.
-No SQLite database file is required or used.
+The application data is stored directly in Supabase PostgreSQL using DATABASE_URL.
+Supabase Storage is still used for uploaded images, through the Supabase client.
 
-Required environment variables:
-    SUPABASE_URL
-    SUPABASE_SECRET_KEY
-
-For older Supabase projects, SUPABASE_SERVICE_ROLE_KEY is accepted as a
-fallback. Prefer SUPABASE_SECRET_KEY for new deployments.
+Set:
+    DATABASE_URL=postgresql://...
+    SUPABASE_URL=https://...
+    SUPABASE_SECRET_KEY=...
 """
 
+import json
 import re
 from datetime import datetime, timezone
 
+import psycopg
+from psycopg.rows import dict_row
 from flask import current_app, g
 from supabase import create_client
 
@@ -30,27 +31,39 @@ TRANSLATABLE_LIST_FIELDS = (
 ALL_TRANSLATABLE_FIELDS = TRANSLATABLE_TEXT_FIELDS + TRANSLATABLE_LIST_FIELDS
 
 
-def _supabase():
-    """Return the server-side Supabase client for the current Flask app."""
-    if "supabase" not in g:
+def _database_url():
+    url = current_app.config.get("DATABASE_URL") or ""
+    if not url:
+        raise RuntimeError("DATABASE_URL is not configured.")
+    return url
+
+
+def get_db():
+    """Return one PostgreSQL connection for the current Flask request/context."""
+    if "db" not in g:
+        g.db = psycopg.connect(_database_url(), row_factory=dict_row)
+    return g.db
+
+
+def _supabase_storage():
+    """Supabase client used only for Storage operations."""
+    if "supabase_storage" not in g:
         url = current_app.config.get("SUPABASE_URL")
         key = current_app.config.get("SUPABASE_SECRET_KEY")
         if not url or not key:
             raise RuntimeError(
-                "Supabase is not configured. Set SUPABASE_URL and "
-                "SUPABASE_SECRET_KEY in the hosting environment."
+                "Supabase Storage is not configured. Set SUPABASE_URL and "
+                "SUPABASE_SECRET_KEY."
             )
-        g.supabase = create_client(url, key)
-    return g.supabase
-
-
-def get_db():
-    """Backward-compatible alias used by the CLI reset command."""
-    return _supabase()
+        g.supabase_storage = create_client(url, key)
+    return g.supabase_storage
 
 
 def close_db(exc=None):
-    g.pop("supabase", None)
+    conn = g.pop("db", None)
+    if conn is not None:
+        conn.close()
+    g.pop("supabase_storage", None)
 
 
 def init_app(app):
@@ -58,12 +71,16 @@ def init_app(app):
 
 
 def init_db():
-    """
-    Validate that the configured Supabase database is reachable and that the
-    required schema exists. Schema creation belongs in supabase_schema.sql,
-    which is run once in the Supabase SQL Editor.
-    """
-    _supabase().table("safaris").select("id").limit(1).execute()
+    """Check that PostgreSQL is reachable and the application schema exists."""
+    with get_db().cursor() as cur:
+        cur.execute("select 1 from public.safaris limit 1")
+        cur.fetchone()
+
+
+def _json_value(value, default):
+    if value is None:
+        return default
+    return value
 
 
 def _safari_row_to_dict(row, locale=DEFAULT_LOCALE, include_images=True):
@@ -97,50 +114,39 @@ def _inquiry_row_to_dict(row, safaris_by_id):
 
 
 def get_all_safaris(locale=DEFAULT_LOCALE):
-    result = (
-        _supabase()
-        .table("safaris")
-        .select("*")
-        .order("display_order")
-        .execute()
-    )
-    return [_safari_row_to_dict(r, locale) for r in (result.data or [])]
+    with get_db().cursor() as cur:
+        cur.execute("select * from public.safaris order by display_order")
+        rows = cur.fetchall()
+    return [_safari_row_to_dict(r, locale) for r in rows]
 
 
 def get_safari_by_slug(slug, locale=DEFAULT_LOCALE):
-    result = (
-        _supabase()
-        .table("safaris")
-        .select("*")
-        .eq("slug", slug)
-        .limit(1)
-        .execute()
-    )
-    row = (result.data or [None])[0]
+    with get_db().cursor() as cur:
+        cur.execute("select * from public.safaris where slug = %s limit 1", (slug,))
+        row = cur.fetchone()
     return _safari_row_to_dict(row, locale) if row else None
 
 
 def get_other_safaris(slug, locale=DEFAULT_LOCALE, limit=3):
-    result = (
-        _supabase()
-        .table("safaris")
-        .select("*")
-        .neq("slug", slug)
-        .order("display_order")
-        .limit(limit)
-        .execute()
-    )
-    return [_safari_row_to_dict(r, locale) for r in (result.data or [])]
+    with get_db().cursor() as cur:
+        cur.execute(
+            "select * from public.safaris where slug <> %s order by display_order limit %s",
+            (slug, limit),
+        )
+        rows = cur.fetchall()
+    return [_safari_row_to_dict(r, locale) for r in rows]
 
 
 def count_safaris():
-    result = _supabase().table("safaris").select("id").execute()
-    return len(result.data or [])
+    with get_db().cursor() as cur:
+        cur.execute("select count(*) as count from public.safaris")
+        return cur.fetchone()["count"]
 
 
 def get_all_slugs():
-    result = _supabase().table("safaris").select("slug").execute()
-    return [r["slug"] for r in (result.data or [])]
+    with get_db().cursor() as cur:
+        cur.execute("select slug from public.safaris")
+        return [r["slug"] for r in cur.fetchall()]
 
 
 def _safari_row_to_raw_dict(row):
@@ -152,15 +158,9 @@ def _safari_row_to_raw_dict(row):
 
 
 def get_safari_raw(slug):
-    result = (
-        _supabase()
-        .table("safaris")
-        .select("*")
-        .eq("slug", slug)
-        .limit(1)
-        .execute()
-    )
-    row = (result.data or [None])[0]
+    with get_db().cursor() as cur:
+        cur.execute("select * from public.safaris where slug = %s limit 1", (slug,))
+        row = cur.fetchone()
     return _safari_row_to_raw_dict(row) if row else None
 
 
@@ -182,131 +182,151 @@ def unique_slug(base_slug, exclude_slug=None):
 
 
 def next_display_order():
-    result = (
-        _supabase()
-        .table("safaris")
-        .select("display_order")
-        .order("display_order", desc=True)
-        .limit(1)
-        .execute()
-    )
-    rows = result.data or []
-    return (rows[0]["display_order"] if rows else -1) + 1
+    with get_db().cursor() as cur:
+        cur.execute(
+            "select display_order from public.safaris "
+            "order by display_order desc limit 1"
+        )
+        row = cur.fetchone()
+    return (row["display_order"] if row else -1) + 1
+
+
+def _prepare_payload(data):
+    payload = dict(data)
+    for field in ALL_TRANSLATABLE_FIELDS:
+        payload[field] = payload.get(field, {})
+    return payload
+
+
+def _columns_and_values(payload):
+    cols = list(payload.keys())
+    vals = [json.dumps(payload[c]) if c in ALL_TRANSLATABLE_FIELDS else payload[c] for c in cols]
+    return cols, vals
 
 
 def create_safari(data):
-    payload = dict(data)
-    for field in ALL_TRANSLATABLE_FIELDS:
-        payload[field] = payload.get(field, {})
+    payload = _prepare_payload(data)
     payload["display_order"] = next_display_order()
-
-    result = _supabase().table("safaris").insert(payload).execute()
-    if not result.data:
-        raise RuntimeError("Supabase did not return the newly created safari.")
-    return result.data[0]["slug"]
+    cols, vals = _columns_and_values(payload)
+    col_sql = ", ".join(cols)
+    placeholders = ", ".join(["%s"] * len(cols))
+    with get_db().cursor() as cur:
+        cur.execute(
+            f"insert into public.safaris ({col_sql}) values ({placeholders}) returning slug",
+            vals,
+        )
+        row = cur.fetchone()
+    get_db().commit()
+    return row["slug"]
 
 
 def update_safari(safari_id, data):
-    payload = dict(data)
-    for field in ALL_TRANSLATABLE_FIELDS:
-        payload[field] = payload.get(field, {})
-    _supabase().table("safaris").update(payload).eq("id", safari_id).execute()
+    payload = _prepare_payload(data)
+    cols, vals = _columns_and_values(payload)
+    assignments = ", ".join(f"{c} = %s" for c in cols)
+    with get_db().cursor() as cur:
+        cur.execute(
+            f"update public.safaris set {assignments} where id = %s",
+            vals + [safari_id],
+        )
+    get_db().commit()
 
 
 def delete_safari(safari_id):
-    _supabase().table("safaris").delete().eq("id", safari_id).execute()
+    with get_db().cursor() as cur:
+        cur.execute("delete from public.safaris where id = %s", (safari_id,))
+    get_db().commit()
 
 
 def seed_safaris(seed_list):
     if not seed_list:
         return
-    payloads = []
     for order, entry in enumerate(seed_list):
-        payload = dict(entry)
-        for field in ALL_TRANSLATABLE_FIELDS:
-            payload[field] = payload.get(field, {})
+        payload = _prepare_payload(entry)
         payload["display_order"] = order
-        payloads.append(payload)
-    _supabase().table("safaris").insert(payloads).execute()
+        cols, vals = _columns_and_values(payload)
+        col_sql = ", ".join(cols)
+        placeholders = ", ".join(["%s"] * len(cols))
+        with get_db().cursor() as cur:
+            cur.execute(
+                f"insert into public.safaris ({col_sql}) values ({placeholders})",
+                vals,
+            )
+    get_db().commit()
 
 
 def get_gallery_images(safari_id):
-    result = (
-        _supabase()
-        .table("gallery_images")
-        .select("*")
-        .eq("safari_id", safari_id)
-        .order("uploaded_at", desc=True)
-        .execute()
-    )
-    return [_image_row_to_dict(r) for r in (result.data or [])]
+    with get_db().cursor() as cur:
+        cur.execute(
+            "select * from public.gallery_images "
+            "where safari_id = %s order by uploaded_at desc",
+            (safari_id,),
+        )
+        rows = cur.fetchall()
+    return [_image_row_to_dict(r) for r in rows]
 
 
 def add_gallery_image(safari_id, filename):
-    _supabase().table("gallery_images").insert({
-        "safari_id": safari_id,
-        "filename": filename,
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    with get_db().cursor() as cur:
+        cur.execute(
+            "insert into public.gallery_images "
+            "(safari_id, filename, uploaded_at) values (%s, %s, %s)",
+            (safari_id, filename, datetime.now(timezone.utc)),
+        )
+    get_db().commit()
 
 
 def get_gallery_image(image_id):
-    result = (
-        _supabase()
-        .table("gallery_images")
-        .select("*")
-        .eq("id", image_id)
-        .limit(1)
-        .execute()
-    )
-    row = (result.data or [None])[0]
-    if not row:
-        return None
-
-    safari_result = (
-        _supabase()
-        .table("safaris")
-        .select("slug")
-        .eq("id", row["safari_id"])
-        .limit(1)
-        .execute()
-    )
-    safari = (safari_result.data or [None])[0]
-    row["safari_slug"] = safari["slug"] if safari else None
-    return row
+    with get_db().cursor() as cur:
+        cur.execute(
+            "select gi.*, s.slug as safari_slug "
+            "from public.gallery_images gi "
+            "left join public.safaris s on s.id = gi.safari_id "
+            "where gi.id = %s limit 1",
+            (image_id,),
+        )
+        row = cur.fetchone()
+    return dict(row) if row else None
 
 
 def delete_gallery_image(image_id):
-    _supabase().table("gallery_images").delete().eq("id", image_id).execute()
+    with get_db().cursor() as cur:
+        cur.execute("delete from public.gallery_images where id = %s", (image_id,))
+    get_db().commit()
 
 
 def add_inquiry(name, email, phone, message, safari_id):
-    _supabase().table("inquiries").insert({
-        "name": name,
-        "email": email,
-        "phone": phone,
-        "message": message,
-        "safari_id": safari_id,
-        "received_at": datetime.now(timezone.utc).isoformat(),
-    }).execute()
+    with get_db().cursor() as cur:
+        cur.execute(
+            "insert into public.inquiries "
+            "(name, email, phone, message, safari_id, received_at) "
+            "values (%s, %s, %s, %s, %s, %s)",
+            (name, email, phone, message, safari_id, datetime.now(timezone.utc)),
+        )
+    get_db().commit()
 
 
 def get_all_inquiries(locale=DEFAULT_LOCALE):
-    result = (
-        _supabase()
-        .table("inquiries")
-        .select("*")
-        .order("received_at", desc=True)
-        .execute()
-    )
+    with get_db().cursor() as cur:
+        cur.execute(
+            "select * from public.inquiries order by received_at desc"
+        )
+        rows = cur.fetchall()
     safaris_by_id = {s["id"]: s for s in get_all_safaris(locale)}
-    return [_inquiry_row_to_dict(r, safaris_by_id) for r in (result.data or [])]
+    return [_inquiry_row_to_dict(r, safaris_by_id) for r in rows]
 
 
 def reset_database(seed_list):
-    """Delete application rows from Supabase and reseed the safari catalog."""
-    client = _supabase()
-    client.table("gallery_images").delete().gte("id", 0).execute()
-    client.table("inquiries").delete().gte("id", 0).execute()
-    client.table("safaris").delete().gte("id", 0).execute()
+    """Delete application rows from PostgreSQL and reseed the safari catalog."""
+    with get_db().cursor() as cur:
+        cur.execute("delete from public.gallery_images")
+        cur.execute("delete from public.inquiries")
+        cur.execute("delete from public.safaris")
+    get_db().commit()
     seed_safaris(seed_list)
+
+
+def storage():
+    return _supabase_storage().storage.from_(
+        current_app.config.get("SUPABASE_STORAGE_BUCKET", "media")
+    )
