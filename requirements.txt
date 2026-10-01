@@ -1,0 +1,13 @@
+Flask>=3.0,<4.0
+gunicorn
+
+# The next three are only used when the matching environment variables
+# are set - see the README ("Using a webhosted database" and "Using
+# cloud storage for uploads"). Safe to leave installed either way.
+#
+# PyMySQL: webhosted MySQL database (DB_HOST)
+# certifi: encrypted connection to that database (DB_SSL)
+# cloudinary: photo uploads to cloud storage (CLOUDINARY_URL)
+PyMySQL>=1.1,<2.0
+certifi
+cloudinary>=1.40
