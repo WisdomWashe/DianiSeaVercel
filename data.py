@@ -1379,8 +1379,8 @@ FAQS = [
 ]
 
 CONTACT_INFO = {
-    "phone": "+254 103 928 036",
-    "whatsapp": "+254 103 928 036",
+    "phone": "+254 722 883 998",
+    "whatsapp": "+254 722 883 998",
     "email": "dianiseaadventures@gmail.com",
     "address": "Diani Beach Road, Diani Beach, Kwale County, Kenya",
     "hours": [
