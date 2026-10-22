@@ -2,6 +2,10 @@
 
 {% block title %}Diani Sea Adventures - Sea Safaris on Kenya's South Coast{% endblock %}
 
+{% block structured_data %}
+<script type="application/ld+json">{{ faq_jsonld|tojson }}</script>
+{% endblock %}
+
 {% block content %}
 
 <section class="hero">
@@ -66,7 +70,7 @@
       <a href="{{ url_for('safari_detail', slug=s.slug) }}" class="safari-row accent-{{ s.accent }}">
         <div class="safari-row-visual">
           {% if s.cover_url %}
-            <img src="{{ s.cover_url }}" alt="" width="600" height="450">
+            <img src="{{ s.cover_url }}" alt="{{ s.name }} - {{ s.tagline }}" width="600" height="450">
           {% else %}
             <span class="safari-row-visual-emoji" aria-hidden="true">{{ s.emoji }}</span>
           {% endif %}

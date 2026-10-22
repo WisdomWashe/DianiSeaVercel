@@ -11,10 +11,7 @@
     </div>
   </div>
 
-  <div class="container admin-subnav">
-    <a href="{{ url_for('admin_dashboard') }}" class="active">Dashboard</a>
-    <a href="{{ url_for('admin_safaris') }}">Manage safaris</a>
-  </div>
+  {% include '_admin_subnav.html' %}
 
   <div class="container admin-section">
     <h2>Safari galleries</h2>
