@@ -3,7 +3,19 @@
 {% block title %}{{ safari.name }} - Diani Sea Adventures{% endblock %}
 {% block meta_description %}{{ safari.teaser }}{% endblock %}
 
+{% block og_image %}
+{% if safari.cover_url %}
+<meta property="og:image" content="{{ safari.cover_url }}">
+{% endif %}
+{% endblock %}
+
+{% block structured_data %}
+<script type="application/ld+json">{{ touristtrip_jsonld|tojson }}</script>
+<script type="application/ld+json">{{ breadcrumb_jsonld|tojson }}</script>
+{% endblock %}
+
 {% block content %}
+{% from "_macros.html" import stars %}
 
 <div class="accent-{{ safari.accent }}">
   <div class="container breadcrumb">
@@ -91,6 +103,12 @@
 
     <aside class="booking-panel">
       <div class="price">{{ safari.price }}</div>
+      {% if review_stats.count %}
+        <a href="#reviews" class="rating-summary">
+          {{ stars(review_stats.average, tr('review_stars_label', n='%.1f'|format(review_stats.average))) }}
+          <span>{{ '%.1f'|format(review_stats.average) }} &middot; {{ tr('review_count_one' if review_stats.count == 1 else 'review_count_many', n=review_stats.count) }}</span>
+        </a>
+      {% endif %}
       <a href="{{ url_for('contact', safari=safari.slug) }}" class="btn btn-coral btn-block">{{ tr('detail_enquire_button') }}</a>
       <p class="contact-line">{{ tr('detail_call_whatsapp') }} <a href="tel:{{ contact.phone }}">{{ contact.phone }}</a></p>
     </aside>
@@ -144,6 +162,78 @@
   </div>
 </section>
 
+<section class="reviews-section accent-{{ safari.accent }}" id="reviews">
+  <div class="container">
+    <div class="section-heading">
+      <h2>{{ tr('review_heading') }}</h2>
+    </div>
+
+    {% if review_stats.count %}
+      <div class="reviews-summary">
+        <span class="reviews-average">{{ '%.1f'|format(review_stats.average) }}</span>
+        <div>
+          {{ stars(review_stats.average, tr('review_stars_label', n='%.1f'|format(review_stats.average))) }}
+          <div class="reviews-count">{{ tr('review_count_one' if review_stats.count == 1 else 'review_count_many', n=review_stats.count) }}</div>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="reviews-layout">
+      <div class="reviews-list">
+        {% for r in reviews %}
+          <article class="review-card">
+            <div class="review-card-head">
+              {{ stars(r.rating, tr('review_stars_label', n=r.rating)) }}
+              <span class="review-date">{{ r.date_display }}</span>
+            </div>
+            <p class="review-body">{{ r.body }}</p>
+            <p class="review-author">{{ r.name }}</p>
+          </article>
+        {% else %}
+          <div class="gallery-empty"><p style="margin:0;">{{ tr('review_none') }}</p></div>
+        {% endfor %}
+      </div>
+
+      <form method="POST" action="{{ url_for('safari_detail', slug=safari.slug, _anchor='reviews') }}" class="review-form">
+        <h3>{{ tr('review_form_heading') }}</h3>
+
+        {% for category, message in get_flashed_messages(with_categories=true, category_filter=['review_success', 'review_error']) %}
+          <p class="review-notice review-notice-{{ 'ok' if category == 'review_success' else 'error' }}" role="status">{{ message }}</p>
+        {% endfor %}
+
+        <div class="form-field">
+          <label for="review-name">{{ tr('review_label_name') }}</label>
+          <input type="text" id="review-name" name="name" maxlength="80" value="{{ review_form.name }}" required>
+        </div>
+
+        <fieldset class="star-input">
+          <legend>{{ tr('review_label_rating') }}</legend>
+          <div class="star-input-row">
+            {% for n in [5, 4, 3, 2, 1] %}
+              <input type="radio" id="review-rating-{{ n }}" name="rating" value="{{ n }}" {% if review_form.rating|string == n|string %}checked{% endif %} required>
+              <label for="review-rating-{{ n }}" title="{{ tr('review_stars_label', n=n) }}"><span class="visually-hidden">{{ tr('review_stars_label', n=n) }}</span><span aria-hidden="true">&#9733;</span></label>
+            {% endfor %}
+          </div>
+        </fieldset>
+
+        <div class="form-field">
+          <label for="review-body">{{ tr('review_label_body') }}</label>
+          <textarea id="review-body" name="body" rows="5" minlength="10" maxlength="1500" placeholder="{{ tr('review_placeholder') }}" required>{{ review_form.body }}</textarea>
+        </div>
+
+        {# Honeypot: invisible to people, tempting to bots. Anything typed here = spam. #}
+        <div class="hp-field" aria-hidden="true">
+          <label for="review-website">Website</label>
+          <input type="text" id="review-website" name="website" tabindex="-1" autocomplete="off">
+        </div>
+
+        <button type="submit" class="btn btn-coral">{{ tr('review_button') }}</button>
+        <p class="field-hint">{{ tr('review_note') }}</p>
+      </form>
+    </div>
+  </div>
+</section>
+
 {% if others %}
 <section class="related-band">
   <div class="container">
@@ -154,7 +244,7 @@
       {% for o in others %}
         <a href="{{ url_for('safari_detail', slug=o.slug) }}" class="related-card {{ '' if o.cover_url else 'no-cover' }}">
           {% if o.cover_url %}
-            <img class="related-cover" src="{{ o.cover_url }}" alt="">
+            <img class="related-cover" src="{{ o.cover_url }}" alt="{{ o.name }}">
           {% else %}
             <span class="related-cover-emoji" aria-hidden="true">{{ o.emoji }}</span>
           {% endif %}

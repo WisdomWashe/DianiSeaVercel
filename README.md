@@ -21,6 +21,9 @@ French depending on the visitor's browser language.
   shows English, German, or French accordingly, with a manual switcher in
   the nav that overrides the guess and is remembered for the session. See
   "Languages" below for how this works and how to add more.
+- **Guest reviews** on every safari page (star rating + written review, in
+  all three languages), moderated from the admin panel - see "Guest
+  reviews" below.
 - Contact page with an enquiry form (saved to the database) and a map
 - Password-protected admin dashboard to add, edit, and delete safaris
   (including their itinerary), upload/delete gallery and cover photos, and
@@ -80,6 +83,53 @@ the database rows directly.
 
 **Admin dashboard is English-only on purpose** - only your own staff use
 it, so translating internal tooling wasn't worth the extra maintenance.
+
+## Guest reviews
+
+Every safari page has a **Guest reviews** section: the average star rating,
+the approved reviews, and a form for guests to write their own (name, 1-5
+stars, and a written review of at least 10 characters).
+
+**Nothing a guest submits appears on the site until you approve it.** New
+reviews arrive as *Pending*. Under **Reviews** in the admin nav (a red
+badge shows how many are waiting) you can, for each review:
+
+| Button | What it does |
+|---|---|
+| **Approve** | Marks it approved - it goes live on the safari page |
+| **Disapprove** | Rejects it - it never appears (kept so you can see what was rejected) |
+| **Hide / Unhide** | Pulls an approved review off the site temporarily, without changing its approval decision |
+| **Delete** | Removes it permanently (asks for confirmation) |
+
+A review is public only when it is **Approved *and* not Hidden**. Each
+review card shows "Visible on site" / "Not shown on site" so you never have
+to work that out. The tabs (Pending / Approved / Disapproved / Hidden / All)
+filter the list, with counts.
+
+- The average rating and review count shown on each safari page only count
+  visible reviews, and update instantly as you moderate.
+- Reviews appear in whatever language the guest wrote them in, on every
+  language version of the page; the surrounding labels and dates are
+  translated.
+- Deleting a safari also deletes its reviews. `flask --app app reset-db`
+  deletes all reviews too.
+
+**Spam protection** is simple and needs no extra service: a hidden field
+that real people never fill in (bots do), and a limit of one review per
+minute per browser. Combined with approve-first moderation this is plenty
+for a small site, but it is not a defence against a determined attacker.
+
+**SEO:** once a safari has at least one visible review, its structured data
+includes the star rating and the reviews themselves, which makes the page
+*eligible* for star ratings in Google results (Google decides whether to
+show them).
+
+> **The testimonials on the homepage are placeholders, not real guests.**
+> The "What guests say" quotes (Anke V., Brian O., Marco T., Sofia R.) live
+> in `TESTIMONIALS` in `data.py` and were written as sample content.
+> Publishing invented testimonials as real is misleading and can breach
+> consumer-protection rules and Google's policies. Before going live,
+> replace them with genuine quotes (with permission) or delete the section.
 
 ## Admin access
 
@@ -165,12 +215,13 @@ time you run the app, and seeded with the six default excursions from
 > compatible - run `flask --app app reset-db` to migrate (see the warning
 > below: back up first if you've collected real photos or enquiries).
 
-Three tables:
+Four tables:
 
 - `safaris` - one row per excursion category
 - `gallery_images` - one row per uploaded photo, linked to a safari
   (the actual image file lives on disk under `static/uploads/<slug>/`)
 - `inquiries` - contact-form submissions, optionally linked to a safari
+- `reviews` - guest reviews per safari, with a moderation status (see "Guest reviews")
 
 **Editing safari content:** the admin panel's **Manage safaris** page (see
 above) is the normal way to add, edit, or delete safaris now - no need to
@@ -257,7 +308,7 @@ on where the *app itself* is deployed:
    included) - in your WSGI config file (see "Deploying to
    PythonAnywhere" below for exactly where, since PythonAnywhere doesn't
    run your app through a shell that would remember `export`).
-5. Reload your web app. The very first request creates the three tables
+5. Reload your web app. The very first request creates the four tables
    and seeds the six default safaris automatically - no SQL to run by
    hand.
 
@@ -278,16 +329,38 @@ get a hostname, port, username, password, and database name - set those as
 `DB_HOST`, `DB_PORT` (only if it's not the standard 3306), `DB_USER`,
 `DB_PASSWORD`, `DB_NAME`.
 
-**These almost always require an encrypted connection.** Set:
+**These almost always require an encrypted (TLS) connection.** There are
+two cases, depending on the provider:
 
-```bash
-export DB_SSL=1
-```
+| Your provider... | Set | Example |
+|---|---|---|
+| gives you its **own CA certificate file** (Aiven's `ca.pem`) | `DB_SSL_CA=ca.pem` | Aiven |
+| uses **publicly-trusted** certificates, no file | `DB_SSL=1` | TiDB Cloud |
 
-This validates the server against the standard public CA bundle (via the
-`certifi` package, already in `requirements.txt`). If your provider gives
-you its own CA certificate file instead of using a publicly-trusted one,
-point `DB_SSL_CA` at that file's path instead of setting `DB_SSL`.
+- **`DB_SSL_CA` on its own is enough** - you don't also need `DB_SSL=1`.
+  Put the certificate file in the project folder (this project already
+  includes an Aiven `ca.pem`); a relative path like `ca.pem` is resolved
+  against the project folder, so it works the same on Vercel, Fly.io and
+  your own machine. If the file can't be found, the app stops at startup
+  with a message saying so, rather than failing later.
+- **Using `DB_SSL=1` with a provider that has its own CA fails** with a
+  "certificate verify failed" error - that's the signal to switch to
+  `DB_SSL_CA` instead.
+- **`DB_SSL_VERIFY_IDENTITY`** (optional) also checks the server's hostname
+  against its certificate. Default: on with `DB_SSL=1`; off with
+  `DB_SSL_CA` (a provider's private CA only ever signs that provider's own
+  servers, and its certificates don't always list your connection
+  hostname). Set it to `1` to force it on, or `0` to turn it off.
+- `DB_PORT` matters here: Aiven, for example, uses a non-standard port
+  (such as 10250), not 3306.
+
+**Don't commit real credentials.** `.env.example` lists every variable the
+app reads - copy the names into your host's environment-variable settings
+(Vercel: Project → Settings → Environment Variables). The app does **not**
+read `.env` files itself, and `.gitignore`, `.vercelignore` and
+`.dockerignore` all exclude `*.env` so a local file with real values can't
+be committed or uploaded by accident. `ca.pem` is a *public* certificate and
+is deliberately kept in.
 
 > **Testing note:** the MySQL code path was written carefully against
 > documented PyMySQL and MySQL behavior, and the SQLite path (which
@@ -371,7 +444,8 @@ detects it's running on Vercel.
    storage for uploads" above).
 2. In your Vercel project's settings, add these environment variables:
    `SECRET_KEY`, `ADMIN_PASSWORD`, `DB_HOST`, `DB_USER`, `DB_PASSWORD`,
-   `DB_NAME`, `DB_SSL` (or `DB_SSL_CA`), `CLOUDINARY_URL`.
+   `DB_NAME`, `DB_PORT` (if not 3306), `DB_SSL_CA` (or `DB_SSL`),
+   `CLOUDINARY_URL` - see `.env.example` for a ready-made checklist.
 3. No `vercel.json` is required - Vercel auto-detects `app.py` at the
    project root as a Flask app (a variable named `app`, which this
    project already has) and handles routing for you.
@@ -390,6 +464,51 @@ just worth knowing if a very large gallery upload batch ever times out.
 deployment and take a moment to restart it on the next visit - the first
 request after a quiet period may be slower than subsequent ones. This is
 normal Vercel behavior, not specific to this app.
+
+## Search engine optimization (SEO)
+
+**Built in (no setup needed):**
+
+- `/sitemap.xml` - every page in every language, with `hreflang`
+  alternates linking the English/German/French versions together. Updates
+  automatically when you add or delete safaris in the admin panel.
+- `/robots.txt` - allows crawling, blocks `/admin/`, points to the sitemap.
+  Admin pages also carry a `noindex` tag.
+- **Canonical + hreflang tags** on every page, so Google treats the three
+  language versions as translations of each other (not duplicate content)
+  and shows the right one to each searcher.
+- **Structured data (JSON-LD):** `TravelAgency` (sitewide business info),
+  `TouristTrip` + `BreadcrumbList` on every safari page, and `FAQPage` on
+  the homepage (eligible for expandable FAQ results in Google).
+- **Open Graph / Twitter Card tags** - safari pages shared on WhatsApp,
+  Facebook, etc. show the cover photo, title, and teaser.
+- Unique `<title>` and meta description per page, descriptive image `alt`
+  text, one `<h1>` per page, clean readable URLs, mobile-first layout.
+- Correct `https://` URLs behind proxies (Vercel, Fly.io, PythonAnywhere).
+
+**Not built in, deliberately:** price in structured data. Prices are
+stored as display text ("€450 - €1,100 per trip"), and wrong structured
+prices can get a site penalized, so it's omitted rather than guessed.
+
+**What code alone cannot do - these matter more than anything above for
+tourism searches, and only you can do them:**
+
+1. **Deploy on a real domain** (e.g. `dianiseaadventures.com` or a
+   `.co.ke`) - rankings attach to the domain, not a `*.vercel.app` or
+   `*.pythonanywhere.com` address.
+2. **Google Search Console** (search.google.com/search-console): verify
+   your domain, then submit `https://yourdomain.com/sitemap.xml`.
+3. **Google Business Profile** (business.google.com): the single
+   biggest lever for searches like "boat trips Diani". Add photos,
+   hours, phone, and your website link.
+4. **Reviews** - ask every guest for a Google and TripAdvisor review.
+5. **Listings and backlinks** - TripAdvisor, partner hotels' "things to
+   do" pages, local tourism directories, travel bloggers.
+6. **Keep content real and current** - accurate prices, real photos, and
+   real itineraries (especially the Jet Ski Safari placeholder - see above).
+
+SEO takes weeks to months to show results, and nobody can honestly
+guarantee a specific ranking.
 
 ## Deploying to PythonAnywhere
 
@@ -467,7 +586,10 @@ diani-sea-adventures/
 ├── requirements.txt
 ├── Dockerfile              # For Fly.io (or any other Docker-based host)
 ├── fly.toml                # Fly.io app configuration
-├── .vercelignore           # Excludes local-storage-only paths from Vercel deploys
+├── .vercelignore           # Excludes local-storage-only paths and credential files from Vercel deploys
+├── .gitignore              # Keeps *.env credential files and local data out of git
+├── .env.example            # Checklist of environment variables (not read by the app)
+├── ca.pem                  # Database provider's public CA certificate (Aiven) for DB_SSL_CA
 ├── data/
 │   └── diani.db             # Created automatically on first run (SQLite backend only)
 ├── static/
@@ -484,5 +606,8 @@ diani-sea-adventures/
     ├── admin_dashboard.html
     ├── admin_safaris_list.html
     ├── admin_safari_form.html
+    ├── admin_reviews.html
+    ├── _admin_subnav.html      # shared admin navigation (with pending-reviews badge)
+    ├── _macros.html            # star-rating macro
     └── 404.html
 ```

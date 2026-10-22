@@ -1,11 +1,13 @@
 import os
 import shutil
+import time
 from datetime import datetime
 from functools import wraps
 from urllib.parse import urlencode
 
 from flask import (
     Flask,
+    Response,
     abort,
     flash,
     g,
@@ -15,6 +17,7 @@ from flask import (
     session,
     url_for,
 )
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 import db
@@ -23,6 +26,7 @@ from i18n import (
     DEFAULT_LOCALE,
     LOCALE_NAMES,
     SUPPORTED_LOCALES,
+    format_date,
     resolve_locale,
     translate,
 )
@@ -36,6 +40,20 @@ ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "webp", "gif"}
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-key-change-this-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB per request
+
+# SameSite=Lax means browsers won't send the login cookie on a POST that
+# originates from another website - which blocks the classic "malicious
+# page auto-submits a Delete button while you're logged in" attack
+# against the admin panel's POST forms (delete safari/photo/review, etc.).
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+# Every host this app supports (PythonAnywhere, Fly.io, Vercel, nginx)
+# terminates HTTPS at a reverse proxy and forwards plain HTTP internally,
+# setting standard X-Forwarded-* headers to say so. Without this, Flask
+# sees every request as scheme=http, which would make canonical URLs,
+# hreflang tags, and the sitemap all advertise the wrong (insecure)
+# scheme - SEO-relevant, not just cosmetic.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Database: SQLite by default (a local file, zero setup), or a webhosted
 # MySQL database if DB_HOST is set - e.g. the MySQL database included
@@ -68,21 +86,65 @@ if DB_HOST:
             "pip install -r requirements.txt"
         )
 
-    # Optional encrypted connection, needed by most databases reached over
-    # the public internet (Aiven, TiDB Cloud, ...). DB_SSL=1 verifies the
-    # server against the standard public CA bundle; set DB_SSL_CA to a CA
-    # certificate file path instead if your provider uses its own CA.
-    app.config["DB_SSL"] = os.environ.get("DB_SSL", "").lower() in ("1", "true", "yes")
-    app.config["DB_SSL_CA"] = os.environ.get("DB_SSL_CA", "")
-    if app.config["DB_SSL"] and not app.config["DB_SSL_CA"]:
-        try:
-            import certifi
-        except ImportError:
-            raise RuntimeError(
-                "DB_SSL is set, but the 'certifi' package isn't installed. "
-                "Run: pip install -r requirements.txt"
+    # Optional encrypted (TLS) connection - needed by most databases
+    # reached over the public internet (Aiven, TiDB Cloud, ...).
+    #
+    #   DB_SSL=1            verify the server against the standard public CA
+    #                       bundle (works for providers with publicly-trusted
+    #                       certificates, e.g. TiDB Cloud)
+    #   DB_SSL_CA=<path>    verify against this CA certificate file instead -
+    #                       needed for providers that use their own private CA
+    #                       (Aiven gives you a `ca.pem`). Setting this ALONE
+    #                       is enough to turn TLS on; DB_SSL=1 isn't also
+    #                       required. A relative path (like `ca.pem`) is
+    #                       resolved against the project folder, not the
+    #                       process's working directory, so it works the same
+    #                       on Vercel, Fly.io and locally.
+    #   DB_SSL_VERIFY_IDENTITY=0/1
+    #                       also check the server's hostname against its
+    #                       certificate. Defaults to on for the public CA
+    #                       bundle, and off when you supply your own provider
+    #                       CA (that CA only ever signs your provider's own
+    #                       servers, and provider certificates don't always
+    #                       list the connection hostname).
+    ssl_ca_setting = os.environ.get("DB_SSL_CA", "").strip()
+    ssl_flag = os.environ.get("DB_SSL", "").lower() in ("1", "true", "yes")
+    app.config["DB_SSL"] = ssl_flag or bool(ssl_ca_setting)
+    app.config["DB_SSL_CA"] = ""
+    app.config["DB_SSL_VERIFY_IDENTITY"] = False
+
+    if app.config["DB_SSL"]:
+        if ssl_ca_setting:
+            ca_path = (
+                ssl_ca_setting
+                if os.path.isabs(ssl_ca_setting)
+                else os.path.join(BASE_DIR, ssl_ca_setting)
             )
-        app.config["DB_SSL_CA"] = certifi.where()
+            if not os.path.isfile(ca_path):
+                raise RuntimeError(
+                    f"DB_SSL_CA is set to '{ssl_ca_setting}', but no file was "
+                    f"found at {ca_path}. Put your provider's CA certificate "
+                    f"(e.g. Aiven's ca.pem) in the project folder, or give "
+                    f"DB_SSL_CA as a full path."
+                )
+            app.config["DB_SSL_CA"] = ca_path
+            default_verify_identity = False
+        else:
+            try:
+                import certifi
+            except ImportError:
+                raise RuntimeError(
+                    "DB_SSL is set, but the 'certifi' package isn't installed. "
+                    "Run: pip install -r requirements.txt"
+                )
+            app.config["DB_SSL_CA"] = certifi.where()
+            default_verify_identity = True
+
+        verify_env = os.environ.get("DB_SSL_VERIFY_IDENTITY", "").strip().lower()
+        if verify_env:
+            app.config["DB_SSL_VERIFY_IDENTITY"] = verify_env in ("1", "true", "yes")
+        else:
+            app.config["DB_SSL_VERIFY_IDENTITY"] = default_verify_identity
 else:
     if os.environ.get("VERCEL"):
         # Checked here, before os.makedirs below, so a missing DB_HOST on
@@ -335,7 +397,7 @@ def gallery_image_url(slug, stored_value):
     needs the static/uploads/<slug>/ path built for it."""
     if stored_value.startswith(("http://", "https://")):
         return stored_value
-    return url_for("static", filename=f"uploads/{slug}/{stored_value}")
+    return url_for("static", filename=f"uploads/{slug}/{stored_value}", _external=True)
 
 
 def login_required(view):
@@ -393,7 +455,11 @@ def safari_cover_url(safari):
         return safari["cover_url"]
     path = os.path.join(COVERS_DIR, f"{safari['slug']}.jpg")
     if os.path.exists(path):
-        return url_for("static", filename=f"covers/{safari['slug']}.jpg")
+        # _external=True: og:image and the TouristTrip structured data's
+        # image field both require a fully-qualified URL, not a relative
+        # path - harmless for the normal <img src> use of this same
+        # value, which works identically either way.
+        return url_for("static", filename=f"covers/{safari['slug']}.jpg", _external=True)
     return None
 
 
@@ -406,13 +472,20 @@ def localized_contact_info(locale):
 
 
 def build_switch_urls():
-    """Current page's URL with ?lang=xx swapped for each supported language,
-    preserving any other query params (e.g. ?safari=... on the contact page)."""
+    """
+    Current page's URL with ?lang=xx swapped for each supported language,
+    preserving any other query params (e.g. ?safari=... on the contact
+    page). These double as both the nav language switcher's links AND
+    the canonical/hreflang URLs in <head> (see base.html) - search
+    engines require those to be absolute, so this always returns full
+    https://... URLs rather than relative paths.
+    """
+    base = request.url_root.rstrip("/")
     urls = {}
     for code in SUPPORTED_LOCALES:
         args = request.args.to_dict(flat=True)
         args["lang"] = code
-        urls[code] = request.path + "?" + urlencode(args)
+        urls[code] = base + request.path + "?" + urlencode(args)
     return urls
 
 
@@ -429,7 +502,14 @@ def inject_globals():
             for img in s["images"]:
                 img["url"] = gallery_image_url(s["slug"], img["filename"])
 
+    switch_urls = build_switch_urls()
+
+    pending_reviews_count = 0
+    if is_admin_area and session.get("is_admin"):
+        pending_reviews_count = db.count_pending_reviews()
+
     return {
+        "pending_reviews_count": pending_reviews_count,
         "safaris": safaris,
         "contact": localized_contact_info(locale),
         "current_year": datetime.now().year,
@@ -437,7 +517,16 @@ def inject_globals():
         "locale": locale,
         "SUPPORTED_LOCALES": SUPPORTED_LOCALES,
         "LOCALE_NAMES": LOCALE_NAMES,
-        "switch_urls": build_switch_urls(),
+        "switch_urls": switch_urls,
+        # Each language variant is self-canonical (it's genuinely
+        # different content per language, not a duplicate), with the
+        # language's own ?lang=xx made explicit - see base.html's
+        # hreflang tags, which use switch_urls for the same reason.
+        "canonical_url": switch_urls[locale],
+        # The site's homepage, for the sitewide TravelAgency structured
+        # data's "url" field - deliberately NOT switch_urls (which is
+        # always specific to the *current* page).
+        "home_url": f"{request.url_root.rstrip('/')}{url_for('index')}",
         "use_cloud_storage": USE_CLOUD_STORAGE,
     }
 
@@ -467,16 +556,83 @@ def index():
         for item in FAQS
     ]
 
-    return render_template("index.html", testimonials=testimonials, faqs=faqs)
+    faq_jsonld = {
+        "@context": "https://schema.org",
+        "@type": "FAQPage",
+        "mainEntity": [
+            {
+                "@type": "Question",
+                "name": item["q"],
+                "acceptedAnswer": {"@type": "Answer", "text": item["a"]},
+            }
+            for item in faqs
+        ],
+    }
+
+    return render_template(
+        "index.html", testimonials=testimonials, faqs=faqs, faq_jsonld=faq_jsonld
+    )
 
 
-@app.route("/safari/<slug>")
+REVIEW_COOLDOWN_SECONDS = 60
+REVIEW_MIN_LENGTH = 10
+REVIEW_MAX_LENGTH = 1500
+REVIEW_NAME_MAX_LENGTH = 80
+
+
+@app.route("/safari/<slug>", methods=["GET", "POST"])
 def safari_detail(slug):
     locale = g.locale
     safari = db.get_safari_by_slug(slug, locale)
     if safari is None:
         abort(404)
     safari["cover_url"] = safari_cover_url(safari)
+
+    # --- Guest review submission (POST to the same URL as the page) ------
+    # Nothing submitted here is shown on the site until an admin approves
+    # it. Spam protection is deliberately simple and dependency-free: a
+    # hidden "website" field that real people never fill in (bots do), and
+    # a one-review-per-minute cooldown per browser session.
+    review_form = {"name": "", "rating": "", "body": ""}
+    status_code = 200
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        body = request.form.get("body", "").strip()
+        rating_raw = request.form.get("rating", "")
+        review_form = {"name": name, "rating": rating_raw, "body": body}
+        try:
+            rating = int(rating_raw)
+        except ValueError:
+            rating = 0
+
+        done_url = url_for("safari_detail", slug=slug, lang=locale, _anchor="reviews")
+        if request.form.get("website"):
+            # Honeypot tripped: look like a success, store nothing.
+            flash(translate("review_flash_success", locale), "review_success")
+            return redirect(done_url)
+
+        now = time.time()
+        if now - session.get("last_review_at", 0) < REVIEW_COOLDOWN_SECONDS:
+            flash(translate("review_flash_wait", locale), "review_error")
+            status_code = 400
+        elif (
+            not name
+            or len(name) > REVIEW_NAME_MAX_LENGTH
+            or rating not in (1, 2, 3, 4, 5)
+            or not (REVIEW_MIN_LENGTH <= len(body) <= REVIEW_MAX_LENGTH)
+        ):
+            flash(translate("review_flash_error", locale), "review_error")
+            status_code = 400
+        else:
+            db.add_review(safari["id"], name, rating, body)
+            session["last_review_at"] = now
+            flash(translate("review_flash_success", locale), "review_success")
+            return redirect(done_url)
+
+    reviews = db.get_public_reviews(safari["id"])
+    for r in reviews:
+        r["date_display"] = format_date(r["created_at"], locale)
+    review_stats = db.get_review_stats(safari["id"])
 
     for img in safari["images"]:
         img["url"] = gallery_image_url(safari["slug"], img["filename"])
@@ -485,8 +641,88 @@ def safari_detail(slug):
     for o in others:
         o["cover_url"] = safari_cover_url(o)
 
-    return render_template(
-        "safari_detail.html", safari=safari, gallery=safari["images"], others=others
+    base = request.url_root.rstrip("/")
+    page_url = f"{base}{url_for('safari_detail', slug=slug)}?lang={locale}"
+    home_url = f"{base}{url_for('index')}"
+
+    touristtrip_jsonld = {
+        "@context": "https://schema.org",
+        "@type": "TouristTrip",
+        "name": safari["name"],
+        "description": safari["teaser"],
+        "url": page_url,
+        "provider": {
+            "@type": "TravelAgency",
+            "name": "Diani Sea Adventures",
+            "url": home_url,
+        },
+    }
+    if safari.get("cover_url"):
+        touristtrip_jsonld["image"] = safari["cover_url"]
+
+    # Real, visible, approved reviews only. Typed as both TouristTrip and
+    # Product because Google's review-star results are defined for
+    # Product-like items; whether stars actually show is Google's call.
+    if review_stats["count"]:
+        touristtrip_jsonld["@type"] = ["TouristTrip", "Product"]
+        touristtrip_jsonld["aggregateRating"] = {
+            "@type": "AggregateRating",
+            "ratingValue": round(review_stats["average"], 1),
+            "reviewCount": review_stats["count"],
+            "bestRating": 5,
+            "worstRating": 1,
+        }
+        touristtrip_jsonld["review"] = [
+            {
+                "@type": "Review",
+                "author": {"@type": "Person", "name": r["name"]},
+                "datePublished": r["created_at"][:10],
+                "reviewRating": {
+                    "@type": "Rating",
+                    "ratingValue": r["rating"],
+                    "bestRating": 5,
+                    "worstRating": 1,
+                },
+                "reviewBody": r["body"],
+            }
+            for r in reviews[:10]
+        ]
+
+    breadcrumb_jsonld = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "itemListElement": [
+            {
+                "@type": "ListItem", "position": 1,
+                "name": translate("detail_breadcrumb_home", locale),
+                "item": home_url,
+            },
+            {
+                "@type": "ListItem", "position": 2,
+                "name": translate("detail_breadcrumb_safaris", locale),
+                "item": f"{home_url}#safaris",
+            },
+            {
+                "@type": "ListItem", "position": 3,
+                "name": safari["name"],
+                "item": page_url,
+            },
+        ],
+    }
+
+    return (
+        render_template(
+            "safari_detail.html",
+            safari=safari,
+            gallery=safari["images"],
+            others=others,
+            touristtrip_jsonld=touristtrip_jsonld,
+            breadcrumb_jsonld=breadcrumb_jsonld,
+            reviews=reviews,
+            review_stats=review_stats,
+            review_form=review_form,
+        ),
+        status_code,
     )
 
 
@@ -518,6 +754,48 @@ def contact():
         return redirect(url_for("contact"))
 
     return render_template("contact.html", preselect=preselect)
+
+
+@app.route("/sitemap.xml")
+def sitemap():
+    """
+    Lists every public page in every language, with hreflang alternate
+    links so search engines understand the English/German/French
+    versions of a page are intentional translations of each other
+    (not duplicate or unrelated content) - see base.html's matching
+    <link rel="alternate" hreflang="..."> tags for the same data used
+    on the pages themselves.
+    """
+    base = request.url_root.rstrip("/")
+
+    # (endpoint, url_for kwargs) for every page that doesn't depend on
+    # database content; safari pages are added separately below.
+    static_pages = [("index", {}), ("contact", {})]
+    safari_pages = [("safari_detail", {"slug": slug}) for slug in db.get_all_slugs()]
+
+    entries = []
+    for endpoint, kwargs in static_pages + safari_pages:
+        alternates = {
+            loc: f"{base}{url_for(endpoint, **kwargs)}?lang={loc}"
+            for loc in SUPPORTED_LOCALES
+        }
+        for loc in SUPPORTED_LOCALES:
+            entries.append({"loc": alternates[loc], "alternates": alternates})
+
+    xml = render_template("sitemap.xml", entries=entries)
+    return Response(xml, mimetype="application/xml")
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    base = request.url_root.rstrip("/")
+    lines = [
+        "User-agent: *",
+        "Disallow: /admin/",
+        "Allow: /",
+        f"Sitemap: {base}/sitemap.xml",
+    ]
+    return Response("\n".join(lines) + "\n", mimetype="text/plain")
 
 
 # ---------------------------------------------------------------------------
@@ -705,6 +983,53 @@ def admin_safari_delete(slug):
 
     flash(f"Deleted {raw['name'].get(DEFAULT_LOCALE, slug)}.", "success")
     return redirect(url_for("admin_safaris"))
+
+
+@app.route("/admin/reviews")
+@login_required
+def admin_reviews():
+    counts = db.count_reviews_by_filter()
+    current = request.args.get("filter")
+    if current not in db.REVIEW_FILTERS:
+        # Land on the work queue if there is one, otherwise show everything
+        current = "pending" if counts["pending"] else "all"
+    reviews = db.get_reviews_for_admin(current, DEFAULT_LOCALE)
+    for r in reviews:
+        r["date_display"] = format_date(r["created_at"], DEFAULT_LOCALE)
+    return render_template(
+        "admin_reviews.html", reviews=reviews, counts=counts, current=current
+    )
+
+
+@app.route("/admin/reviews/<int:review_id>/<action>", methods=["POST"])
+@login_required
+def admin_review_action(review_id, action):
+    review = db.get_review(review_id)
+    if review is None:
+        abort(404)
+
+    if action == "approve":
+        db.set_review_status(review_id, "approved")
+        flash("Review approved - it's now visible on the site (unless hidden).", "success")
+    elif action == "disapprove":
+        db.set_review_status(review_id, "disapproved")
+        flash("Review disapproved - it will not appear on the site.", "success")
+    elif action == "hide":
+        db.set_review_hidden(review_id, True)
+        flash("Review hidden from the site.", "success")
+    elif action == "unhide":
+        db.set_review_hidden(review_id, False)
+        flash("Review unhidden.", "success")
+    elif action == "delete":
+        db.delete_review(review_id)
+        flash("Review deleted permanently.", "success")
+    else:
+        abort(404)
+
+    back = request.form.get("filter")
+    if back not in db.REVIEW_FILTERS:
+        back = "all"
+    return redirect(url_for("admin_reviews", filter=back))
 
 
 @app.errorhandler(404)

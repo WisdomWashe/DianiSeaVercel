@@ -1,0 +1,6 @@
+{% set ep = request.endpoint %}
+<div class="container admin-subnav">
+  <a href="{{ url_for('admin_dashboard') }}" class="{{ 'active' if ep == 'admin_dashboard' }}">Dashboard</a>
+  <a href="{{ url_for('admin_safaris') }}" class="{{ 'active' if ep in ('admin_safaris', 'admin_safari_new', 'admin_safari_edit') }}">Manage safaris</a>
+  <a href="{{ url_for('admin_reviews') }}" class="{{ 'active' if ep == 'admin_reviews' }}">Reviews{% if pending_reviews_count %} <span class="nav-badge" title="Awaiting approval">{{ pending_reviews_count }}</span>{% endif %}</a>
+</div>

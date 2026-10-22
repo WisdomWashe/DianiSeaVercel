@@ -5,10 +5,60 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Diani Sea Adventures{% endblock %}</title>
   <meta name="description" content="{% block meta_description %}{{ tr('meta_default_description') }}{% endblock %}">
+  {% if request.path.startswith('/admin') %}<meta name="robots" content="noindex, nofollow">{% endif %}
+
+  {# Each language version of a page is self-canonical (it's genuinely
+     different content, not a duplicate) - hreflang below links the
+     versions together so search engines show the right one per
+     searcher rather than treating them as unrelated or duplicate
+     pages. Both use absolute URLs, as required. #}
+  <link rel="canonical" href="{{ canonical_url }}">
+  {% for code, href in switch_urls.items() %}
+  <link rel="alternate" hreflang="{{ code }}" href="{{ href }}">
+  {% endfor %}
+  <link rel="alternate" hreflang="x-default" href="{{ switch_urls.en }}">
+
+  {# Open Graph / Twitter Card: controls how pages look when shared on
+     social media. og_image defaults to nothing (omitted) unless a page
+     overrides it with a real photo - see safari_detail.html. #}
+  <meta property="og:site_name" content="Diani Sea Adventures">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="{{ canonical_url }}">
+  <meta property="og:locale" content="{{ locale }}">
+  <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}">
+  <meta property="og:description" content="{% block og_description %}{{ self.meta_description() }}{% endblock %}">
+  {% block og_image %}{% endblock %}
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ self.og_title() }}">
+  <meta name="twitter:description" content="{{ self.og_description() }}">
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌊</text></svg>">
+
+  {# Sitewide business info, read by Google for knowledge panels / local
+     search - appears on every page since it describes the business as
+     a whole, not any one page's content. #}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TravelAgency",
+    "name": "Diani Sea Adventures",
+    "url": "{{ home_url }}",
+    "telephone": "{{ contact.phone }}",
+    "email": "{{ contact.email }}",
+    "address": {
+      "@type": "PostalAddress",
+      "streetAddress": "Diani Beach Road",
+      "addressLocality": "Diani Beach",
+      "addressRegion": "Kwale County",
+      "addressCountry": "KE"
+    }
+  }
+  </script>
+
+  {% block structured_data %}{% endblock %}
 </head>
 <body>
 
@@ -44,11 +94,14 @@
     </div>
   </header>
 
-  {% with messages = get_flashed_messages(with_categories=true) %}
+  {% with messages = get_flashed_messages(with_categories=true) | rejectattr(0, 'in', ['review_success', 'review_error']) | list %}
     {% if messages %}
       <ul class="flash-list">
         {% for category, message in messages %}
+          {# review_* notices are shown next to the review form instead - see safari_detail.html #}
+          {% if not category.startswith('review_') %}
           <li class="flash flash-{{ category }}">{{ message }}</li>
+          {% endif %}
         {% endfor %}
       </ul>
     {% endif %}

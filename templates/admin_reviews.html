@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+
+{% block title %}Reviews - Diani Sea Adventures{% endblock %}
+
+{% block content %}
+{% from "_macros.html" import stars %}
+<div class="admin-shell">
+  <div class="admin-topbar">
+    <div class="container">
+      <span>Signed in as admin</span>
+      <a href="{{ url_for('admin_logout') }}">Log out</a>
+    </div>
+  </div>
+
+  {% include '_admin_subnav.html' %}
+
+  <div class="container admin-section">
+    <div class="admin-section-head">
+      <h2>Guest reviews</h2>
+    </div>
+    <p class="admin-hint">
+      New reviews arrive as <strong>Pending</strong> and are <strong>not shown</strong> on the site until you approve them.
+      A review is public only when it is <strong>Approved</strong> and <strong>not Hidden</strong>.
+    </p>
+
+    <div class="filter-tabs">
+      {% for key, label in [('pending', 'Pending'), ('approved', 'Approved'), ('disapproved', 'Disapproved'), ('hidden', 'Hidden'), ('all', 'All')] %}
+        <a href="{{ url_for('admin_reviews', filter=key) }}" class="{{ 'active' if current == key }}">{{ label }} <span class="filter-count">{{ counts[key] }}</span></a>
+      {% endfor %}
+    </div>
+
+    <div class="review-admin-list">
+      {% for r in reviews %}
+        {% set visible = r.status == 'approved' and not r.is_hidden %}
+        <article class="review-admin-card">
+          <div class="review-admin-head">
+            <div>
+              {{ stars(r.rating, r.rating ~ ' out of 5 stars') }}
+              <strong class="review-admin-name">{{ r.name }}</strong>
+            </div>
+            <div class="review-admin-meta">
+              {% if r.safari %}
+                <a href="{{ url_for('safari_detail', slug=r.safari.slug) }}#reviews" target="_blank" rel="noopener">{{ r.safari.name }}</a>
+              {% else %}
+                (safari removed)
+              {% endif %}
+              &middot; {{ r.date_display }}
+            </div>
+          </div>
+
+          <div class="review-admin-badges">
+            <span class="badge badge-{{ r.status }}">{{ r.status|capitalize }}</span>
+            {% if r.is_hidden %}<span class="badge badge-hidden">Hidden</span>{% endif %}
+            {% if visible %}
+              <span class="badge badge-live">Visible on site</span>
+            {% else %}
+              <span class="badge badge-off">Not shown on site</span>
+            {% endif %}
+          </div>
+
+          <p class="review-admin-body">{{ r.body }}</p>
+
+          <div class="review-admin-actions">
+            {% if r.status != 'approved' %}
+              <form method="POST" action="{{ url_for('admin_review_action', review_id=r.id, action='approve') }}">
+                <input type="hidden" name="filter" value="{{ current }}">
+                <button type="submit" class="btn btn-small btn-coral">Approve</button>
+              </form>
+            {% endif %}
+            {% if r.status != 'disapproved' %}
+              <form method="POST" action="{{ url_for('admin_review_action', review_id=r.id, action='disapprove') }}">
+                <input type="hidden" name="filter" value="{{ current }}">
+                <button type="submit" class="btn btn-small btn-outline-dark">Disapprove</button>
+              </form>
+            {% endif %}
+            <form method="POST" action="{{ url_for('admin_review_action', review_id=r.id, action='unhide' if r.is_hidden else 'hide') }}">
+              <input type="hidden" name="filter" value="{{ current }}">
+              <button type="submit" class="btn btn-small btn-outline-dark">{{ 'Unhide' if r.is_hidden else 'Hide' }}</button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_review_action', review_id=r.id, action='delete') }}" onsubmit="return confirm('Permanently delete this review? This cannot be undone.');">
+              <input type="hidden" name="filter" value="{{ current }}">
+              <button type="submit" class="btn btn-small btn-outline-dark btn-danger">Delete</button>
+            </form>
+          </div>
+        </article>
+      {% else %}
+        <p class="empty-note">No reviews in this view.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

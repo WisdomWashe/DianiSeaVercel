@@ -42,6 +42,25 @@ def resolve_locale(value, locale):
     return next((v for v in value.values() if v), "")
 
 
+MONTH_ABBREVIATIONS = {
+    "en": ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+    "de": ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."],
+    "fr": ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."],
+}
+
+
+def format_date(iso_string, locale):
+    """'2026-10-12T09:30:00' -> '12 Oct 2026' (month name per language)."""
+    from datetime import datetime
+
+    try:
+        d = datetime.fromisoformat(iso_string)
+    except (TypeError, ValueError):
+        return str(iso_string)[:10]
+    months = MONTH_ABBREVIATIONS.get(locale, MONTH_ABBREVIATIONS[DEFAULT_LOCALE])
+    return f"{d.day} {months[d.month - 1]} {d.year}"
+
+
 def translate(key, locale, **kwargs):
     """Look up a static UI string, falling back to English, then the key itself."""
     text = UI_STRINGS.get(locale, {}).get(key)
@@ -149,6 +168,21 @@ UI_STRINGS = {
         "detail_gallery_empty": "Photos coming soon - check back after our next {name}.",
         "detail_itinerary_heading": "How the day unfolds",
         "detail_related_heading": "Other safaris",
+        "review_heading": "Guest reviews",
+        "review_none": "No reviews yet - be the first to share your experience.",
+        "review_count_one": "{n} review",
+        "review_count_many": "{n} reviews",
+        "review_stars_label": "{n} out of 5 stars",
+        "review_form_heading": "Write a review",
+        "review_label_name": "Your name",
+        "review_label_rating": "Your rating",
+        "review_label_body": "Your review",
+        "review_placeholder": "What did you enjoy? What should future guests know?",
+        "review_button": "Submit review",
+        "review_note": "Reviews are checked before they appear on the site.",
+        "review_flash_success": "Thank you! Your review was received and will appear once it has been approved.",
+        "review_flash_error": "Please add your name, choose a star rating, and write a few words (at least 10 characters).",
+        "review_flash_wait": "Please wait a minute before submitting another review.",
 
         "contact_page_title": "Let's find you a safari",
         "contact_page_subtitle": "Send us your dates and how many people are travelling, and we'll reply with availability - usually within a few hours.",
@@ -257,6 +291,21 @@ UI_STRINGS = {
         "detail_gallery_empty": "Fotos folgen in Kürze - schauen Sie nach unserer nächsten Tour wieder vorbei.",
         "detail_itinerary_heading": "So läuft der Tag ab",
         "detail_related_heading": "Weitere Safaris",
+        "review_heading": "Gästebewertungen",
+        "review_none": "Noch keine Bewertungen - teilen Sie gerne Ihre Erfahrung mit uns.",
+        "review_count_one": "{n} Bewertung",
+        "review_count_many": "{n} Bewertungen",
+        "review_stars_label": "{n} von 5 Sternen",
+        "review_form_heading": "Bewertung schreiben",
+        "review_label_name": "Ihr Name",
+        "review_label_rating": "Ihre Bewertung",
+        "review_label_body": "Ihr Erfahrungsbericht",
+        "review_placeholder": "Was hat Ihnen gefallen? Was sollten künftige Gäste wissen?",
+        "review_button": "Bewertung absenden",
+        "review_note": "Bewertungen werden geprüft, bevor sie auf der Website erscheinen.",
+        "review_flash_success": "Vielen Dank! Ihre Bewertung ist eingegangen und erscheint, sobald sie freigegeben wurde.",
+        "review_flash_error": "Bitte geben Sie Ihren Namen an, wählen Sie eine Sternebewertung und schreiben Sie ein paar Worte (mindestens 10 Zeichen).",
+        "review_flash_wait": "Bitte warten Sie eine Minute, bevor Sie eine weitere Bewertung absenden.",
 
         "contact_page_title": "Lassen Sie uns die passende Safari für Sie finden",
         "contact_page_subtitle": "Teilen Sie uns Ihre Reisedaten und die Anzahl der Personen mit - wir melden uns meist innerhalb weniger Stunden mit der Verfügbarkeit.",
@@ -365,6 +414,21 @@ UI_STRINGS = {
         "detail_gallery_empty": "Photos bientôt disponibles - repassez après notre prochaine sortie.",
         "detail_itinerary_heading": "Le déroulé de la journée",
         "detail_related_heading": "Autres safaris",
+        "review_heading": "Avis des clients",
+        "review_none": "Pas encore d'avis - n'hésitez pas à partager votre expérience.",
+        "review_count_one": "{n} avis",
+        "review_count_many": "{n} avis",
+        "review_stars_label": "{n} sur 5 étoiles",
+        "review_form_heading": "Laisser un avis",
+        "review_label_name": "Votre nom",
+        "review_label_rating": "Votre note",
+        "review_label_body": "Votre avis",
+        "review_placeholder": "Qu'avez-vous aimé ? Que devraient savoir les futurs clients ?",
+        "review_button": "Envoyer l'avis",
+        "review_note": "Les avis sont vérifiés avant d'apparaître sur le site.",
+        "review_flash_success": "Merci ! Votre avis a bien été reçu et apparaîtra dès qu'il aura été approuvé.",
+        "review_flash_error": "Merci d'indiquer votre nom, de choisir une note en étoiles et d'écrire quelques mots (10 caractères minimum).",
+        "review_flash_wait": "Veuillez patienter une minute avant d'envoyer un autre avis.",
 
         "contact_page_title": "Trouvons le safari qu'il vous faut",
         "contact_page_subtitle": "Indiquez-nous vos dates et le nombre de personnes, nous vous répondrons avec les disponibilités - généralement sous quelques heures.",

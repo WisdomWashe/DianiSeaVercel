@@ -1056,6 +1056,116 @@ summary:focus-visible {
 .itinerary-content p { margin: 0; font-size: 0.92rem; color: rgba(20,43,46,0.7); }
 
 /* -------------------------------------------------------------------- */
+/* Reviews (public, safari detail page)                                  */
+/* -------------------------------------------------------------------- */
+.stars { display: inline-flex; gap: 2px; font-size: 1.05rem; line-height: 1; }
+.stars .star { color: rgba(20,43,46,0.2); }
+.stars .star.on { color: var(--gold); }
+
+.rating-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--ink);
+}
+.rating-summary:hover span:last-child { text-decoration: underline; }
+
+.reviews-section { background: var(--sand); padding: 56px 0 64px; }
+.reviews-summary { display: flex; align-items: center; gap: 16px; margin-bottom: 28px; }
+.reviews-average { font-family: var(--font-display); font-size: 3rem; line-height: 1; }
+.reviews-summary .stars { font-size: 1.3rem; }
+.reviews-count { font-size: 0.9rem; color: rgba(20,43,46,0.65); margin-top: 4px; }
+
+.reviews-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 40px;
+  align-items: start;
+}
+@media (max-width: 900px) { .reviews-layout { grid-template-columns: 1fr; } }
+
+.reviews-list { display: grid; gap: 16px; }
+.review-card { background: var(--foam); border-radius: var(--radius-lg); padding: 20px 22px; }
+.review-card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.review-date { font-size: 0.82rem; color: rgba(20,43,46,0.55); }
+.review-body { margin: 0 0 10px; white-space: pre-line; max-width: none; overflow-wrap: anywhere; }
+.review-author { margin: 0; font-weight: 600; font-size: 0.92rem; }
+
+.review-form { background: var(--foam); border-radius: var(--radius-lg); padding: 24px; }
+.review-form h3 { font-size: 1.2rem; font-style: italic; }
+.review-notice { padding: 10px 14px; border-radius: var(--radius); font-size: 0.9rem; font-weight: 500; margin: 0 0 16px; max-width: none; }
+.review-notice-ok { background: #e4f4ee; color: #0d6961; }
+.review-notice-error { background: #fbe7df; color: var(--coral-dark); }
+
+/* Star rating input: radios in DOM order 5..1, laid out reversed, so the
+   sibling selector (~) lights up the chosen star and every star before it.
+   Pure CSS - works without JavaScript. */
+.star-input { border: none; padding: 0; margin: 0 0 20px; }
+.star-input legend { font-weight: 600; font-size: 0.92rem; margin-bottom: 7px; padding: 0; }
+.star-input-row { display: inline-flex; flex-direction: row-reverse; justify-content: flex-end; }
+.star-input input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.star-input label { font-size: 2rem; line-height: 1; padding: 0 3px; cursor: pointer; color: rgba(20,43,46,0.2); }
+.star-input input:checked ~ label,
+.star-input label:hover,
+.star-input label:hover ~ label { color: var(--gold); }
+.star-input input:focus-visible + label { outline: 3px solid var(--coral); outline-offset: 2px; border-radius: 4px; }
+
+/* Honeypot: off-screen rather than display:none, since some bots skip hidden fields */
+.hp-field { position: absolute; left: -9999px; top: auto; width: 1px; height: 1px; overflow: hidden; }
+
+/* -------------------------------------------------------------------- */
+/* Reviews (admin moderation)                                            */
+/* -------------------------------------------------------------------- */
+.nav-badge {
+  display: inline-block;
+  min-width: 20px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--coral);
+  color: var(--foam);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.filter-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 22px; }
+.filter-tabs a {
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1.5px solid rgba(20,43,46,0.2);
+  color: rgba(20,43,46,0.7);
+}
+.filter-tabs a:hover { border-color: var(--ink); color: var(--ink); }
+.filter-tabs a.active { background: var(--ink); border-color: var(--ink); color: var(--foam); }
+.filter-count { opacity: 0.7; font-weight: 500; margin-left: 2px; }
+
+.review-admin-list { display: grid; gap: 14px; }
+.review-admin-card { background: var(--foam); border-radius: var(--radius-lg); padding: 20px 22px; }
+.review-admin-head { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.review-admin-name { margin-left: 10px; }
+.review-admin-meta { font-size: 0.85rem; color: rgba(20,43,46,0.6); }
+.review-admin-meta a { color: inherit; }
+.review-admin-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.badge { display: inline-block; font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--sand); color: var(--ink); }
+.badge-pending { background: #fdf0d2; color: #8a5a00; }
+.badge-approved { background: #e4f4ee; color: #0d6961; }
+.badge-disapproved { background: #fbe7df; color: var(--coral-dark); }
+.badge-hidden { background: #e6e6ee; color: var(--indigo); }
+.badge-live { background: #0d6961; color: var(--foam); }
+.badge-off { background: transparent; color: rgba(20,43,46,0.5); border: 1px solid rgba(20,43,46,0.2); }
+.review-admin-body { margin: 0 0 16px; white-space: pre-line; max-width: none; overflow-wrap: anywhere; }
+.review-admin-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.review-admin-actions form { margin: 0; }
+
+/* -------------------------------------------------------------------- */
 /* 404                                                                   */
 /* -------------------------------------------------------------------- */
 .not-found {

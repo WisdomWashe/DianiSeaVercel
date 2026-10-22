@@ -19,10 +19,11 @@ keeps the two paths from drifting apart and means the SQLite path -
 fully testable without any external service - already exercises nearly
 all of this file's logic.
 
-Three tables:
+Four tables:
 - safaris:        the six safari categories and all their content
 - gallery_images: one row per uploaded photo, linked to a safari
 - inquiries:      contact-form submissions, optionally linked to a safari
+- reviews:        guest reviews per safari, moderated from the admin panel
 
 Photo files themselves still live on disk under static/uploads/<slug>/
 regardless of which database backend is active - only the filename and
@@ -91,6 +92,17 @@ CREATE TABLE IF NOT EXISTS inquiries (
     message TEXT NOT NULL,
     safari_id INTEGER REFERENCES safaris(id) ON DELETE SET NULL,
     received_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    safari_id INTEGER NOT NULL REFERENCES safaris(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    is_hidden INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
 );
 """
 
@@ -167,6 +179,19 @@ SCHEMA_MYSQL = [
         FOREIGN KEY (safari_id) REFERENCES safaris(id) ON DELETE SET NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    """
+    CREATE TABLE IF NOT EXISTS reviews (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        safari_id INT NOT NULL,
+        name VARCHAR(120) NOT NULL,
+        rating INT NOT NULL,
+        body TEXT NOT NULL,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        is_hidden TINYINT(1) NOT NULL DEFAULT 0,
+        created_at VARCHAR(40) NOT NULL,
+        FOREIGN KEY (safari_id) REFERENCES safaris(id) ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 ]
 
 # Every one of these is stored as JSON: a dict of {locale: string} for the
@@ -214,7 +239,9 @@ def get_db():
                 # runs on Vercel) require an encrypted connection.
                 kwargs["ssl_ca"] = current_app.config["DB_SSL_CA"]
                 kwargs["ssl_verify_cert"] = True
-                kwargs["ssl_verify_identity"] = True
+                kwargs["ssl_verify_identity"] = current_app.config.get(
+                    "DB_SSL_VERIFY_IDENTITY", False
+                )
             g.db = pymysql.connect(**kwargs)
         else:
             g.db = sqlite3.connect(current_app.config["DATABASE_PATH"])
@@ -453,6 +480,7 @@ def delete_safari(safari_id):
     concern, not a database one."""
     conn = get_db()
     _run(conn, "DELETE FROM gallery_images WHERE safari_id = ?", (safari_id,))
+    _run(conn, "DELETE FROM reviews WHERE safari_id = ?", (safari_id,))
     _run(conn, "UPDATE inquiries SET safari_id = NULL WHERE safari_id = ?", (safari_id,))
     _run(conn, "DELETE FROM safaris WHERE id = ?", (safari_id,))
     conn.commit()
@@ -460,12 +488,13 @@ def delete_safari(safari_id):
 
 def drop_all_tables():
     """Used by the `flask reset-db` CLI command. Drops all three tables
-    so init_db() + seed_safaris() can recreate everything from scratch.
+    so init_db() + seed_safaris() can recreate everything from scratch
+    (this includes guest reviews).
     Works on both backends - sqlite3.Connection.executescript() (multi-
     statement) isn't available on the MySQL/PyMySQL path, so this runs
     each DROP TABLE through _run() individually instead."""
     conn = get_db()
-    for table in ("gallery_images", "inquiries", "safaris"):
+    for table in ("reviews", "gallery_images", "inquiries", "safaris"):
         _run(conn, f"DROP TABLE IF EXISTS {table}")
     conn.commit()
 
@@ -545,3 +574,125 @@ def get_all_inquiries(locale=DEFAULT_LOCALE):
     rows = _run(get_db(), "SELECT * FROM inquiries ORDER BY received_at DESC").fetchall()
     safaris_by_id = {s["id"]: s for s in get_all_safaris(locale)}
     return [_inquiry_row_to_dict(r, safaris_by_id) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Reviews
+#
+# Moderation model (two independent switches, matching the admin panel):
+#   status     'pending' (new, awaiting a decision) | 'approved' | 'disapproved'
+#   is_hidden  0/1 - lets the admin pull an already-approved review off the
+#              site temporarily without losing its approval decision
+# A review is shown publicly only when status = 'approved' AND is_hidden = 0.
+# ---------------------------------------------------------------------------
+
+REVIEW_STATUSES = ("pending", "approved", "disapproved")
+_PUBLIC_REVIEW = "status = 'approved' AND is_hidden = 0"
+
+
+def add_review(safari_id, name, rating, body):
+    """Store a new guest review. Always starts as 'pending' - nothing a
+    visitor submits appears on the site until an admin approves it."""
+    conn = get_db()
+    _run(
+        conn,
+        "INSERT INTO reviews (safari_id, name, rating, body, status, is_hidden, created_at) "
+        "VALUES (?, ?, ?, ?, 'pending', 0, ?)",
+        (safari_id, name, rating, body, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+
+
+def get_public_reviews(safari_id, limit=100):
+    rows = _run(
+        get_db(),
+        f"SELECT * FROM reviews WHERE safari_id = ? AND {_PUBLIC_REVIEW} "
+        "ORDER BY created_at DESC LIMIT ?",
+        (safari_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_review_stats(safari_id):
+    """(count, average) over publicly visible reviews. Average is None
+    when there are none."""
+    row = _run(
+        get_db(),
+        f"SELECT COUNT(*) AS n, AVG(rating) AS avg_rating FROM reviews "
+        f"WHERE safari_id = ? AND {_PUBLIC_REVIEW}",
+        (safari_id,),
+    ).fetchone()
+    avg = row["avg_rating"]
+    return {"count": row["n"], "average": float(avg) if avg is not None else None}
+
+
+_ADMIN_FILTERS = {
+    "all": "",
+    "pending": "WHERE status = 'pending'",
+    "approved": "WHERE status = 'approved'",
+    "disapproved": "WHERE status = 'disapproved'",
+    "hidden": "WHERE is_hidden = 1",
+}
+REVIEW_FILTERS = tuple(_ADMIN_FILTERS)
+
+
+def get_reviews_for_admin(filter_key="all", locale=DEFAULT_LOCALE):
+    where = _ADMIN_FILTERS.get(filter_key, "")
+    rows = _run(
+        get_db(), f"SELECT * FROM reviews {where} ORDER BY created_at DESC"
+    ).fetchall()
+    safaris_by_id = {s["id"]: s for s in get_all_safaris(locale)}
+    reviews = []
+    for r in rows:
+        d = dict(r)
+        d["safari"] = safaris_by_id.get(d["safari_id"])
+        reviews.append(d)
+    return reviews
+
+
+def count_reviews_by_filter():
+    """{'all': n, 'pending': n, 'approved': n, 'disapproved': n, 'hidden': n}"""
+    rows = _run(
+        get_db(),
+        "SELECT status, is_hidden, COUNT(*) AS n FROM reviews GROUP BY status, is_hidden",
+    ).fetchall()
+    counts = {key: 0 for key in REVIEW_FILTERS}
+    for r in rows:
+        n = int(r["n"])
+        counts["all"] += n
+        counts[r["status"]] = counts.get(r["status"], 0) + n
+        if r["is_hidden"]:
+            counts["hidden"] += n
+    return counts
+
+
+def count_pending_reviews():
+    row = _run(
+        get_db(), "SELECT COUNT(*) AS n FROM reviews WHERE status = 'pending'"
+    ).fetchone()
+    return int(row["n"])
+
+
+def get_review(review_id):
+    row = _run(get_db(), "SELECT * FROM reviews WHERE id = ?", (review_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def set_review_status(review_id, status):
+    if status not in REVIEW_STATUSES:
+        raise ValueError(f"Unknown review status: {status}")
+    conn = get_db()
+    _run(conn, "UPDATE reviews SET status = ? WHERE id = ?", (status, review_id))
+    conn.commit()
+
+
+def set_review_hidden(review_id, hidden):
+    conn = get_db()
+    _run(conn, "UPDATE reviews SET is_hidden = ? WHERE id = ?", (1 if hidden else 0, review_id))
+    conn.commit()
+
+
+def delete_review(review_id):
+    conn = get_db()
+    _run(conn, "DELETE FROM reviews WHERE id = ?", (review_id,))
+    conn.commit()
