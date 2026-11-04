@@ -1052,7 +1052,7 @@ def reset_db_command():
     print("Database reset and reseeded.")
 
 
-#bootstrap_database()
+bootstrap_database()
 
 if __name__ == "__main__":
     app.run(debug=True)
